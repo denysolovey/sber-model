@@ -1,6 +1,4 @@
-fastapi
-uvicorn
-pandas
-numpy
-scikit-learn
-python-multipart
+flask==2.3.2
+gunicorn==21.2.0
+numpy==1.24.3
+scikit-learn==1.3.0
