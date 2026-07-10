@@ -1,80 +1,65 @@
-from fastapi import FastAPI, UploadFile, File
-import pandas as pd
 import pickle
-import io
+import numpy as np
+from flask import Flask, request, jsonify
 import os
 
-# Импортируем модель и регистрируем класс для pickle
-import model
-import __main__
-__main__.DefaultCurveModel = model.DefaultCurveModel
+# Создаём приложение
+app = Flask(__name__)
 
-app = FastAPI()
+# Загружаем модель и все настройки из файла
+with open('default_model.pkl', 'rb') as f:
+    container = pickle.load(f)
 
-BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+models = container['models']          # словарь моделей для разных горизонтов (2-12)
+scaler = container['scaler']          # стандартизатор для признаков
+features = container['features']      # список названий 10 признаков
 
-# Загружаем модель
-with open(os.path.join(BASE_DIR, "default_model.pkl"), "rb") as f:
-    MODEL = pickle.load(f)
+# Получаем список горизонтов (обычно 2,3,4,5,6,7,8,9,10,11,12) и сортируем
+horizons = sorted([int(k) for k in models.keys()])
 
-# ------------------------------------------------------------------
-# ДОБАВЛЯЕМ атрибут feature_cols (его нет в сохранённом объекте)
-# ------------------------------------------------------------------
-MODEL.feature_cols = [
-    'age_f',
-    'industry_trailing_dr',
-    'ros',
-    'cash_to_assets_trend',
-    'market_trailing_dr',
-    'wc_to_assets_level',
-    'roa_trend',
-    'debt_to_equity_level',
-    'op_margin_trend',
-    'region_dr'
-]
+# Эндпоинт для проверки работы сервиса (можно открыть в браузере)
+@app.route('/ping', methods=['GET'])
+def ping():
+    return jsonify({'status': 'ok', 'available_horizons': horizons})
 
-# ------------------------------------------------------------------
-# НОРМАЛИЗУЕМ models и scalers в списки с индексацией 0..11
-# (если они хранятся как словари с ключами 1..12)
-# ------------------------------------------------------------------
-if isinstance(MODEL.models, dict):
-    # Сортируем ключи (обычно они 1..12) и превращаем в список
-    MODEL.models = [MODEL.models[k] for k in sorted(MODEL.models.keys())]
-if isinstance(MODEL.scalers, dict):
-    MODEL.scalers = [MODEL.scalers[k] for k in sorted(MODEL.scalers.keys())]
-
-# Проверяем, что получилось 12 элементов
-if len(MODEL.models) != 12 or len(MODEL.scalers) != 12:
-    raise ValueError(f"Ожидалось 12 моделей и 12 скейлеров, получено {len(MODEL.models)} и {len(MODEL.scalers)}")
-
-@app.get("/")
-def home():
-    return {"status": "ok", "message": "Модель кредитного скоринга работает"}
-
-@app.post("/predict")
-async def predict(file: UploadFile = File(...)):
+# ГЛАВНЫЙ эндпоинт для предсказаний (сюда будет стучаться base44)
+@app.route('/predict', methods=['POST'])
+def predict():
     try:
-        contents = await file.read()
-        if not contents:
-            return {"error": "Файл пуст"}, 400
+        # 1. Получаем JSON с данными от base44
+        data = request.get_json()
+        if not data:
+            return jsonify({'error': 'No JSON received'}), 400
 
-        df = pd.read_csv(io.BytesIO(contents))
-
-        # Проверяем наличие всех нужных колонок
-        missing = set(MODEL.feature_cols) - set(df.columns)
+        # 2. Проверяем, что переданы все 10 признаков
+        missing = [f for f in features if f not in data]
         if missing:
-            return {"error": f"Отсутствуют колонки: {missing}"}, 400
+            return jsonify({'error': f'Missing features: {missing}'}), 400
 
-        probs = MODEL.predict(df)
+        # 3. Превращаем полученные данные в массив чисел (строго в том порядке,
+        #    в каком модель ожидает)
+        input_array = np.array([data[f] for f in features]).reshape(1, -1)
 
-        result = []
-        for i in range(len(df)):
-            result.append({
-                "company": i + 1,
-                "pd_curve": probs[i].tolist(),
-                "max_pd": float(probs[i][-1])
-            })
-        return result
+        # 4. Применяем стандартизацию (масштабирование), как при обучении
+        input_scaled = scaler.transform(input_array)
+
+        # 5. Для каждого горизонта (2,3,...,12) получаем вероятность дефолта
+        results = {}
+        for h in horizons:
+            model = models[h]  # достаём модель для конкретного горизонта
+            # predict_proba возвращает [вероятность_класса_0, вероятность_класса_1]
+            # Берём второе число (вероятность дефолта)
+            prob_default = model.predict_proba(input_scaled)[0, 1]
+            results[f'horizon_{h}'] = float(prob_default)
+
+        # 6. Отправляем результат обратно в base44
+        return jsonify(results)
 
     except Exception as e:
-        return {"error": str(e)}, 500
+        # Если что-то пошло не так, отправляем ошибку
+        return jsonify({'error': str(e)}), 500
+
+# Запуск сервера (для Render очень важно использовать порт из переменных окружения)
+if __name__ == '__main__':
+    port = int(os.environ.get('PORT', 5000))
+    app.run(host='0.0.0.0', port=port)
