@@ -7,7 +7,11 @@ import model
 
 app = FastAPI()
 
-with open("default_model.pkl", "rb") as f:
+import os
+
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+
+with open(os.path.join(BASE_DIR, "default_model.pkl"), "rb") as f:
     MODEL = pickle.load(f)
 
 
