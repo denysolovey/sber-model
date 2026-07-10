@@ -18,8 +18,7 @@ with open(os.path.join(BASE_DIR, "default_model.pkl"), "rb") as f:
     MODEL = pickle.load(f)
 
 # ------------------------------------------------------------------
-# ВАЖНО: добавляем атрибут feature_cols, которого нет в сохранённом объекте
-# Список признаков в том порядке, в котором они использовались при обучении
+# ДОБАВЛЯЕМ атрибут feature_cols (его нет в сохранённом объекте)
 # ------------------------------------------------------------------
 MODEL.feature_cols = [
     'age_f',
@@ -33,6 +32,20 @@ MODEL.feature_cols = [
     'op_margin_trend',
     'region_dr'
 ]
+
+# ------------------------------------------------------------------
+# НОРМАЛИЗУЕМ models и scalers в списки с индексацией 0..11
+# (если они хранятся как словари с ключами 1..12)
+# ------------------------------------------------------------------
+if isinstance(MODEL.models, dict):
+    # Сортируем ключи (обычно они 1..12) и превращаем в список
+    MODEL.models = [MODEL.models[k] for k in sorted(MODEL.models.keys())]
+if isinstance(MODEL.scalers, dict):
+    MODEL.scalers = [MODEL.scalers[k] for k in sorted(MODEL.scalers.keys())]
+
+# Проверяем, что получилось 12 элементов
+if len(MODEL.models) != 12 or len(MODEL.scalers) != 12:
+    raise ValueError(f"Ожидалось 12 моделей и 12 скейлеров, получено {len(MODEL.models)} и {len(MODEL.scalers)}")
 
 @app.get("/")
 def home():
