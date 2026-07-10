@@ -4,7 +4,10 @@ import pickle
 import io
 
 import model
+import __main__
 
+
+__main__.DefaultCurveModel = model.DefaultCurveModel
 app = FastAPI()
 
 import os
